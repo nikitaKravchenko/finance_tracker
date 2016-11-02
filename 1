@@ -1,0 +1,1328 @@
+package com.delvenetworks.account.management.service;
+
+
+import com.delvenetworks.account.management.service.exceptions.DuplicateSyndicationAccountUsernameException;
+import com.delvenetworks.account.management.service.exceptions.InvalidSyndicationCredentialException;
+import com.delvenetworks.account.management.service.internal.InternalAccountManagementService;
+import com.delvenetworks.account.management.service.internal.InternalEmailService;
+import com.delvenetworks.account.management.service.internal.OrganizationStateTransitionAgent;
+import com.delvenetworks.core.profiling.Profile;
+import com.delvenetworks.core.profiling.ProfileParameter;
+import com.delvenetworks.featureset.authorization.service.FeatureSetAuthorizationService;
+import com.pluggd.core.exceptions.InvalidArgumentsException;
+import com.pluggd.core.exceptions.NoSuchItemException;
+import com.pluggd.core.security.SecurityContext;
+import com.pluggd.core.security.authentication.AuthenticatedUser;
+import com.pluggd.core.security.authentication.ScopeAuthenticated;
+import com.pluggd.core.security.authentication.client.xfire.ServiceFactory;
+import com.pluggd.core.validation.ArgumentValidation;
+import com.pluggd.core.validation.Constraint;
+import com.pluggd.core.validation.Parameter;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.log4j.Logger;
+
+import java.security.GeneralSecurityException;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Set;
+
+
+@SuppressWarnings("UnusedDeclaration")
+public class AccountManagementServiceImplementation
+        implements AccountManagementService, AccountManagementAdminService {
+
+
+    private static Logger logger = Logger.getLogger(AccountManagementServiceImplementation.class);
+
+
+    private InternalAccountManagementService internalAccountManagementService;
+    private OrganizationStateTransitionAgent organizationStateTransitionAgent;
+    private ServiceFactory<FeatureSetAuthorizationService> featureSetAuthorizationServiceFactory;
+
+    private InternalEmailService internalEmailService;
+    private SharedUtilities sharedUtilities;
+
+    private String accountManagementServiceAuthenticationUsername;
+    private String accountManagementServiceAuthenticationPassword;
+
+
+    //-------------------------------------------------------------
+    // Implementation - AccountManagementService
+    //-------------------------------------------------------------
+
+    @Profile(name = "verifyUser", parameters = { })
+    public void verifyUser(String id)
+            throws NoSuchItemException {
+        internalAccountManagementService.verifyUser(id);
+    }
+
+
+    @Profile(name = "getOrganizationIds", parameters = { })
+    public List<String> getOrganizationIds() {
+        return internalAccountManagementService.getOrganizationIds();
+    }
+
+
+    @Profile(name = "getOrganizationDetails", parameters = { })
+    public OrganizationDetails getOrganizationDetails()
+            throws NoSuchItemException {
+        return internalAccountManagementService.getOrganizationDetails();
+    }
+
+
+    @Profile(name = "updateOrganization", parameters = { })
+    public void updateOrganization(OrganizationDetails organizationDetails)
+            throws InvalidArgumentsException, NoSuchItemException {
+        hackSanitizeOrganizationDetails(organizationDetails);
+        internalAccountManagementService.updateOrganization(organizationDetails, false);
+    }
+
+
+    @Profile(name = "addUser", parameters = { })
+    public AdministratableUserDetails addUser(AdministratableUserDetails administratableUserDetails)
+            throws InvalidArgumentsException, NoSuchItemException {
+        return internalAccountManagementService.addUser(administratableUserDetails);
+    }
+
+
+    @Profile(name = "updateUser", parameters = { })
+    public void updateUser(AdministratableUserDetails administratableUserDetails)
+            throws NoSuchItemException, InvalidArgumentsException {
+        internalAccountManagementService.updateUser(administratableUserDetails);
+    }
+
+
+    @Profile(name = "resendNewUserEmail", parameters = { })
+    public void resendNewUserEmail(String userId)
+            throws NoSuchItemException {
+        internalAccountManagementService.resendNewUserEmail(userId);
+    }
+
+
+    @Profile(name = "deleteUser", parameters = { })
+    public void deleteUser(String userId)
+            throws NoSuchItemException {
+        internalAccountManagementService.deleteUser(userId);
+    }
+
+
+    @Profile(name = "getUsers", parameters = { })
+    public List<AdministratableUserDetails> getUsers() {
+        return internalAccountManagementService.getUsers();
+    }
+
+
+    @Profile(name = "getRoles", parameters = { })
+    public List<String> getRoles() {
+        return internalAccountManagementService.getRoles();
+    }
+
+
+    @Profile(name = "isEmailInUse", parameters = { })
+    public boolean isEmailInUse(String email) {
+        return internalAccountManagementService.isEmailInUse(email);
+    }
+
+
+    @Profile(name = "resendUserActivationEmail", parameters = { })
+    public void resendUserActivationEmail(String email)
+            throws NoSuchItemException {
+        internalAccountManagementService.resendUserActivationEmail(email);
+    }
+
+
+    @Profile(name = "getSelfDetails", parameters = { })
+    public ConfidentialUserDetails getSelfDetails()
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSelfDetails();
+    }
+
+
+    @Profile(name = "updateSelf", parameters = { })
+    public void updateSelf(ConfidentialUserDetails confidentialUserDetails)
+            throws InvalidArgumentsException, NoSuchItemException {
+        internalAccountManagementService.updateSelf(confidentialUserDetails);
+    }
+
+
+    @Profile(name = "getSecurityQuestion", parameters = { })
+    public String getSecurityQuestion(String email)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSecurityQuestion(email);
+    }
+
+
+    @Profile(name = "processSecurityAnswer", parameters = { })
+    public boolean processSecurityAnswer(String email, String givenAnswer)
+            throws NoSuchItemException {
+        return internalAccountManagementService.processSecurityAnswer(email, givenAnswer);
+    }
+
+
+    @Profile(name = "resetPassword", parameters = { })
+    @Deprecated
+    public void resetPassword(String resetPasswordToken, String newSha1DigestedPassword)
+            throws NoSuchItemException, InvalidArgumentsException {
+        internalAccountManagementService.resetPassword(resetPasswordToken, newSha1DigestedPassword);
+    }
+
+
+    @Profile(name = "isTokenExpired", parameters = { })
+    @Deprecated
+    public boolean isTokenExpired(String resetPasswordToken)
+            throws NoSuchItemException {
+        return internalAccountManagementService.isTokenExpired(resetPasswordToken);
+    }
+
+
+    @Profile(name = "createSyndicationAccount", parameters = { })
+    public String createSyndicationAccount(SyndicationAccountDetails syndicationAccountDetails)
+            throws GeneralSecurityException, InvalidSyndicationCredentialException,
+                   DuplicateSyndicationAccountUsernameException {
+        return internalAccountManagementService.createSyndicationAccount(syndicationAccountDetails);
+    }
+
+
+    @Profile(name = "updateSyndicationAccount", parameters = { })
+    public void updateSyndicationAccount(SyndicationAccountDetails syndicationAccountDetails)
+            throws NoSuchItemException, GeneralSecurityException, InvalidSyndicationCredentialException,
+                   DuplicateSyndicationAccountUsernameException {
+        internalAccountManagementService.updateSyndicationAccount(syndicationAccountDetails);
+    }
+
+
+    @Profile(name = "deleteSyndicationAccount", parameters = { })
+    public void deleteSyndicationAccount(String syndicationAccountId)
+            throws NoSuchItemException {
+        internalAccountManagementService.deleteSyndicationAccount(syndicationAccountId);
+    }
+
+
+    @Profile(name = "markSyndicationAccountAsDeleted", parameters = { })
+    public void markSyndicationAccountAsDeleted(String syndicationAccountId)
+            throws NoSuchItemException {
+        internalAccountManagementService.markSyndicationAccountAsDeleted(syndicationAccountId);
+    }
+
+
+    @Profile(name = "getSyndicationAccounts", parameters = { })
+    public List<SyndicationAccountDetails> getSyndicationAccounts()
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSyndicationAccounts();
+    }
+
+
+    @Profile(name = "getSyndicationAccounts", parameters = { })
+    public List<SyndicationAccountDetails> getSyndicationAccounts(boolean allowDeleted)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSyndicationAccounts(allowDeleted);
+    }
+
+    @Profile(name = "getSyndicationAccountById", parameters = { })
+    public SyndicationAccountDetails getSyndicationAccountById(String syndicationAccountId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSyndicationAccountById(syndicationAccountId);
+    }
+
+
+    @Profile(name = "getSyndicationAccountById", parameters = { })
+    public SyndicationAccountDetails getSyndicationAccountById(String syndicationAccountId, boolean allowDeleted)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSyndicationAccountById(syndicationAccountId, allowDeleted);
+    }
+
+
+    @Profile(name = "getSyndicationAccountList", parameters = { })
+    public List<SyndicationAccountDetails> getSyndicationAccountList(List<String> syndicationAccountIds)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSyndicationAccountList(syndicationAccountIds);
+    }
+
+
+    @Profile(name = "getSyndicationAccountList", parameters = { })
+    public List<SyndicationAccountDetails> getSyndicationAccountList(List<String> syndicationAccountIds, boolean allowDeleted)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSyndicationAccountList(syndicationAccountIds, allowDeleted);
+    }
+
+
+    @Profile(name = "getSyndicationAccountByUserName", parameters = { })
+    public SyndicationAccountDetails getSyndicationAccountByUserName(String userName)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getSyndicationAccountByUserName(userName);
+    }
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "confidentialUserDetails", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "confidentialUserDetails.email", constraints = { @Constraint(type = "NotNull"),
+                                                                           @Constraint(type = "MaximumLength", value = "80"),
+                                                                           @Constraint(type = "Email") } ),
+        @Parameter(name = "confidentialUserDetails.firstName", constraints = { @Constraint(type = "MaximumLength", value = "100") } ),
+        @Parameter(name = "confidentialUserDetails.lastName", constraints = { @Constraint(type = "MaximumLength", value = "100") } ),
+        @Parameter(name = "confidentialUserDetails.newSha1DigestedPassword", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "confidentialUserDetails.securityQuestion", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "confidentialUserDetails.securityAnswer", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails", constraints = { } ),
+        @Parameter(name = "organizationDetails.name", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails.website", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails.phoneNumber", constraints = { @Constraint(type = "MaximumLength", value = "40") } ),
+        @Parameter(name = "organizationDetails.streetAddress", constraints = { } ),
+        @Parameter(name = "organizationDetails.streetAddress.address1", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails.streetAddress.address2", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails.streetAddress.city", constraints = { @Constraint(type = "MaximumLength", value = "40") } ),
+        @Parameter(name = "organizationDetails.streetAddress.state", constraints = { @Constraint(type = "MaximumLength", value = "40") } ),
+        @Parameter(name = "organizationDetails.streetAddress.country", constraints = { @Constraint(type = "MaximumLength", value = "40") } ),
+        @Parameter(name = "organizationDetails.streetAddress.zip", constraints = { @Constraint(type = "MaximumLength", value = "20") } ),
+        @Parameter(name = "baseProductType", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "creditCardDetails", constraints = {} ),
+        @Parameter(name = "mmdLiveSettingDetails", constraints = {} )
+    } )
+    @Profile(name = "createAccount", parameters = {})
+    public OrganizationDetails createAccount(ConfidentialUserDetails confidentialUserDetails,
+                                             OrganizationDetails organizationDetails,
+                                             BaseProductType baseProductType,
+                                             CreditCardDetails creditCardDetails,
+                                             MmdLiveSettingDetails mmdLiveSettingDetails)
+            throws InvalidArgumentsException, NoSuchItemException {
+        // Validate
+        if (organizationDetails != null) {
+            sharedUtilities.validateStreetAddress(organizationDetails.getStreetAddress());
+        }
+
+        if (!baseProductType.isSelfServiceable()) {
+            throw new IllegalArgumentException("Self-service account creation is not supported for " + baseProductType);
+        }
+
+        BaseProductTemplateDetails baseProductTemplateDetails = internalAccountManagementService.getBaseProductTemplateByBaseProductType(baseProductType);
+
+        if (baseProductTemplateDetails.isPaymentRequired()) {
+            throw new InvalidArgumentsException("Self-service creation of paid accounts is not supported: " + baseProductType);
+        }
+
+        // Creating the account on our side
+        BaseProductDetails baseProductDetails = createBaseProductDetailsFromBaseProductTemplateDetails(baseProductTemplateDetails, true);
+        ContactDetails billingContactDetails = createContactDetailsFromOrganizationDetailsAndConfidentialUserDetails(organizationDetails, confidentialUserDetails);
+
+        hackSanitizeOrganizationDetails(organizationDetails);
+        organizationDetails = internalAccountManagementService.createAccount(confidentialUserDetails,
+                                                                             organizationDetails,
+                                                                             billingContactDetails,
+                                                                             baseProductDetails,
+                                                                             mmdLiveSettingDetails,
+                                                                             false);
+
+        // Email
+        // If there was a problem, an exception should've been thrown before it gets here
+        internalEmailService.sendSelfServiceWelcomeEmail(confidentialUserDetails.getEmail(), organizationDetails.getId(), baseProductTemplateDetails);
+
+        return organizationDetails;
+    }
+
+
+    @Profile(name = "getAccount", parameters = { })
+    public AccountDetails getAccount()
+            throws NoSuchItemException {
+        return internalAccountManagementService.getAccountAndOrganizationDetails().getAccountDetails();
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "contactDetails", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "contactDetails.email", constraints = { @Constraint(type = "NotNull"),
+                                                                  @Constraint(type = "MaximumLength", value = "255"),
+                                                                  @Constraint(type = "Email") } )
+    } )
+    @Profile(name = "updateBillingContact", parameters = {})
+    public void updateBillingContact(ContactDetails contactDetails)
+            throws NoSuchItemException {
+        String orgId = SecurityContext.getAuthenticatedUser().organizationId();
+
+        // Validate
+        sharedUtilities.validateStreetAddress(contactDetails.getStreetAddress());
+
+        // Update the DB
+        internalAccountManagementService.updateBillingContact(contactDetails);
+    }
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "mmdLiveSettingDetails", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    public void updateMmdLiveSetting(MmdLiveSettingDetails mmdLiveSettingDetails)
+            throws NoSuchItemException {
+        internalAccountManagementService.updateMmdLiveSetting(mmdLiveSettingDetails);
+
+    }
+
+
+    @Profile(name = "updateCreditCard", parameters = {})
+    @Deprecated
+    public void updateCreditCard(CreditCardDetails creditCardDetails)
+            throws NoSuchItemException {
+        throw new UnsupportedOperationException("Unsupported Operation");
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "baseProductType", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "upgradeBaseProduct", parameters = {})
+    public void upgradeBaseProduct(BaseProductType baseProductType)
+            throws InvalidArgumentsException, NoSuchItemException {
+        String orgId = SecurityContext.getAuthenticatedUser().organizationId();
+
+        if (!baseProductType.isSelfServiceable()) {
+            throw new IllegalArgumentException("Self-service upgrade is not supported for " + baseProductType);
+        }
+
+        // Validation
+        BaseProductTemplateDetails baseProductTemplateDetails = internalAccountManagementService.getBaseProductTemplateByBaseProductType(baseProductType);
+
+        if (baseProductTemplateDetails.isPaymentRequired()) {
+            throw new InvalidArgumentsException("Self-service upgrade of paid accounts is not supported: " + baseProductType);
+        }
+
+        AccountDetails accountDetails = internalAccountManagementService.getAccountAndOrganizationDetails().getAccountDetails();
+
+        if (accountDetails == null || accountDetails.getBaseProductDetails() == null) {
+            throw new RuntimeException("Internal Service Error. Unable to purchase " + baseProductType + ". Cause: Unable to locate account's BaseProduct.");
+        } else if (!baseProductType.isValidSelfServicePrecursor(accountDetails.getBaseProductDetails().getBaseProductType())) {
+            throw new RuntimeException("Unable to purchase " + baseProductType + " from " + accountDetails.getBaseProductDetails().getBaseProductType());
+        }
+
+        // Update Features - Delete all addOnProducts?
+        BaseProductDetails baseProductDetails = createBaseProductDetailsFromBaseProductTemplateDetails(baseProductTemplateDetails, true);
+
+        internalAccountManagementService.updateBaseProductFromBaseProductDetails(baseProductDetails);
+
+        // Run OSTA
+        runOSTA();
+
+        // Clear FASAS
+        clearFSASCache(orgId);
+
+        // Send email
+        internalEmailService.sendSelfServiceUpgradeEmail(baseProductType);
+    }
+
+
+    @Profile(name = "validateCreditCard", parameters = {})
+    @Deprecated
+    public void validateCreditCard(CreditCardDetails creditCardDetails)
+            throws InvalidArgumentsException {
+        throw new UnsupportedOperationException("Unsupported method");
+    }
+
+
+    @Profile(name = "getOrganizationApiKeyAndSecretKey", parameters = { })
+    public OrganizationApiKeySecretPair getOrganizationApiKeyAndSecretKey()
+            throws NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+
+        return internalAccountManagementService.getOrganizationApiKeyAndSecretKey(origUser.organizationId());
+    }
+
+
+    @Profile(name = "getOrganizationApiKeyAndSecretKey", parameters = { })
+    @ScopeAuthenticated
+    public OrganizationApiKeySecretPair getOrganizationApiKeyAndSecretKey(String orgId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getOrganizationApiKeyAndSecretKey(orgId);
+    }
+
+
+    @Override
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getOrganizationMmdLivePasswordHash", parameters = { })
+    @ScopeAuthenticated
+    public OrganizationMmdLivePasswordHash getOrganizationMmdLivePasswordHash(String orgId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getOrganizationMmdLivePasswordHash(orgId);
+    }
+
+
+    @Override
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "mmdLivePasswordHash", constraints = { @Constraint(type = "MaximumLength", value = "255") } )
+    } )
+    @Profile(name = "setOrganizationMmdLivePasswordHash", parameters = { })
+    @ScopeAuthenticated
+    public void setOrganizationMmdLivePasswordHash(String orgId, String mmdLivePasswordHash)
+            throws NoSuchItemException {
+        internalAccountManagementService.setOrganizationMmdLivePasswordHash(orgId, mmdLivePasswordHash);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getPasswordAgingDays", parameters = { })
+    @ScopeAuthenticated
+    public Short getPasswordAgingDays(String orgId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getPasswordAgingDays(orgId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getPasswordReuseThreshold", parameters = { })
+    @ScopeAuthenticated
+    public Short getPasswordReuseThreshold(String orgId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getPasswordReuseThreshold(orgId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getLoginFailuresLimit", parameters = { })
+    @ScopeAuthenticated
+    public Short getLoginFailuresLimit(String orgId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getLoginFailuresLimit(orgId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getAccountLockoutMinutes", parameters = { })
+    @ScopeAuthenticated
+    public Short getAccountLockoutMinutes(String orgId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getAccountLockoutMinutes(orgId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getFailedLoginsWindowMinutes", parameters = { })
+    @ScopeAuthenticated
+    public Short getFailedLoginsWindowMinutes(String orgId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getFailedLoginsWindowMinutes(orgId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "childOrgId", constraints = { @Constraint(type = "UUID") } ),
+            @Parameter(name = "parentOrgId", constraints = {} )
+    } )
+    @Profile(name = "setParentOrganization", parameters = { })
+    @Override
+    public void setParentOrganization(String childOrganizationId, String parentOrganizationId)
+            throws NoSuchItemException, GeneralSecurityException {
+        internalAccountManagementService.setParentOrganization(childOrganizationId, parentOrganizationId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "userID", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getAllowedOrganizations", parameters = { })
+    @Override
+    public Set<OrganizationHierarchyNode> getAllowedOrganizations(String userId) throws NoSuchItemException {
+        return internalAccountManagementService.getAllowedOrganizations(userId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "organizationId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getOrganizationHierarchy", parameters = { })
+    @Override
+    public OrganizationHierarchyNode getOrganizationHierarchy(String organizationId) throws NoSuchItemException {
+        return internalAccountManagementService.getOrganizationHierarchy(organizationId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "userId", constraints = { @Constraint(type = "UUID") } ),
+            @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+            @Parameter(name = "roleName", constraints = {} )
+    } )
+    @Profile(name = "setUserOrganizationRoleName", parameters = { })
+    @Override
+    public void setUserOrganizationRoleName(String userId, String organizationId, String roleName)
+            throws NoSuchItemException, GeneralSecurityException {
+        internalAccountManagementService.setUserOrganizationRoleName(userId, organizationId, roleName);
+    }
+
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getExternalUsers", parameters = { })
+    @Override
+    public List<AdministratableUserDetails> getExternalUsers(String organizationId) throws NoSuchItemException {
+        return internalAccountManagementService.getExternalUsers(organizationId);
+    }
+
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "email", constraints = { @Constraint(type = "NotNull") } ),
+            @Parameter(name = "sha1DigestedPassword", constraints = { @Constraint(type = "NotNull") } )
+        } )
+    @Profile(name = "getUserDetailsAndTrackLogin", parameters = { })
+    @Override
+    public ConfidentialUserDetails getUserDetailsAndTrackLogin(String email, String sha1DigestedPassword)
+            throws InvalidArgumentsException {
+        return internalAccountManagementService.getUserDetailsAndTrackLogin(email, sha1DigestedPassword);
+    }
+
+
+    //-------------------------------------------------------------
+    // Implementation - AccountManagementAdminService
+    //-------------------------------------------------------------
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "administratableUserDetails", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "administratableUserDetails.email", constraints = { @Constraint(type = "Email") } )
+    } )
+    @ScopeAuthenticated
+    @Profile(name = "addUserForOrganization", parameters = {})
+    public AdministratableUserDetails addUserForOrganization(String orgId, AdministratableUserDetails administratableUserDetails)
+            throws GeneralSecurityException, InvalidArgumentsException, NoSuchItemException {
+        AdministratableUserDetails newAdministratableUserDetails = null;
+
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            newAdministratableUserDetails = addUser(administratableUserDetails);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+
+        return newAdministratableUserDetails;
+    }
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "confidentialUserDetails", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "confidentialUserDetails.email", constraints = { @Constraint(type = "NotNull"),
+                                                                           @Constraint(type = "MaximumLength", value = "80"),
+                                                                           @Constraint(type = "Email") } ),
+        @Parameter(name = "confidentialUserDetails.firstName", constraints = { @Constraint(type = "MaximumLength", value = "100") } ),
+        @Parameter(name = "confidentialUserDetails.lastName", constraints = { @Constraint(type = "MaximumLength", value = "100") } ),
+        @Parameter(name = "confidentialUserDetails.newSha1DigestedPassword", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "confidentialUserDetails.securityQuestion", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "confidentialUserDetails.securityAnswer", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails", constraints = { } ),
+        @Parameter(name = "organizationDetails.name", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails.website", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails.phoneNumber", constraints = { @Constraint(type = "MaximumLength", value = "40") } ),
+        @Parameter(name = "organizationDetails.streetAddress", constraints = { } ),
+        @Parameter(name = "organizationDetails.streetAddress.address1", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails.streetAddress.address2", constraints = { @Constraint(type = "MaximumLength", value = "255") } ),
+        @Parameter(name = "organizationDetails.streetAddress.city", constraints = { @Constraint(type = "MaximumLength", value = "40") } ),
+        @Parameter(name = "organizationDetails.streetAddress.state", constraints = { @Constraint(type = "MaximumLength", value = "40") } ),
+        @Parameter(name = "organizationDetails.streetAddress.country", constraints = { @Constraint(type = "MaximumLength", value = "40") } ),
+        @Parameter(name = "organizationDetails.streetAddress.zip", constraints = { @Constraint(type = "MaximumLength", value = "20") } ),
+        @Parameter(name = "organizationDetails.oracleId", constraints = {@Constraint(type = "MaximumLength", value = "16")}),
+        @Parameter(name = "organizationDetails.bandwidthCounterName", constraints = {@Constraint(type = "MaximumLength", value = "64")}),
+        @Parameter(name = "organizationDetails.storageCounterName", constraints = {@Constraint(type = "MaximumLength", value = "64")}),
+        @Parameter(name = "billingContactDetails", constraints = { } ),
+        @Parameter(name = "billingContactDetails.email", constraints = { @Constraint(type = "NotNull"),
+                                                                         @Constraint(type = "MaximumLength", value = "255"),
+                                                                         @Constraint(type = "Email") } ),
+        @Parameter(name = "baseProductDetails", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "baseProductDetails.baseProductType", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "creditCardDetails", constraints = {} ),
+        @Parameter(name = "mmdLiveSettingDetails", constraints = {} )
+    } )
+    @Profile(name = "createAccountFromBaseProductDetails", parameters = {})
+    @ScopeAuthenticated
+    public OrganizationDetails createAccountFromBaseProductDetails(ConfidentialUserDetails confidentialUserDetails,
+                                                                   OrganizationDetails organizationDetails,
+                                                                   ContactDetails billingContactDetails,
+                                                                   BaseProductDetails baseProductDetails,
+                                                                   CreditCardDetails creditCardDetails,
+                                                                   MmdLiveSettingDetails mmdLiveSettingDetails)
+            throws GeneralSecurityException, InvalidArgumentsException {
+        // Validate
+        if (organizationDetails != null) {
+            sharedUtilities.validateStreetAddress(organizationDetails.getStreetAddress());
+        }
+
+        if (baseProductDetails.isSelfServiced()) {
+            throw new InvalidArgumentsException("BaseProductDetails cannot be self-serviced.");
+        }
+
+        // Creating the account on our side
+        if (billingContactDetails == null) {
+            billingContactDetails = createContactDetailsFromOrganizationDetailsAndConfidentialUserDetails(organizationDetails, confidentialUserDetails);
+        }
+
+        String password = null;
+        if (confidentialUserDetails.getNewSha1DigestedPassword() == null || confidentialUserDetails.getNewSha1DigestedPassword().isEmpty()) {
+            password = SharedUtilities.createNewPassword();
+            confidentialUserDetails.setNewSha1DigestedPassword(SharedUtilities.sha1Digest(password));
+            confidentialUserDetails.setPasswordUpdateNeeded(true);
+        }
+
+        hackSanitizeOrganizationDetails(organizationDetails);
+        organizationDetails = internalAccountManagementService.createAccount(confidentialUserDetails,
+                                                                             organizationDetails,
+                                                                             billingContactDetails,
+                                                                             baseProductDetails,
+                                                                             mmdLiveSettingDetails,
+                                                                             true);
+
+        // Email
+        internalEmailService.sendAssistedWelcomeEmail(organizationDetails.getId(), confidentialUserDetails.getEmail(), password, baseProductDetails);
+
+        return organizationDetails;
+    }
+
+
+    @Profile(name = "deleteBaseProductTemplate", parameters = { })
+    @ScopeAuthenticated
+    public void deleteBaseProductTemplate(BaseProductType baseProductType)
+            throws GeneralSecurityException, NoSuchItemException {
+        internalAccountManagementService.deleteBaseProductTemplate(baseProductType);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "userId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "deleteUserByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public void deleteUserByOrgId(String orgId, String userId)
+            throws GeneralSecurityException, InvalidArgumentsException, NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            deleteUser(userId);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "startDate", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "endDate", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "findAllOrganizationIdsCreatedBetween", parameters = { })
+    @ScopeAuthenticated
+    public List<String> findAllOrganizationIdsCreatedBetween(Date startDate, Date endDate)
+            throws GeneralSecurityException {
+        return internalAccountManagementService.findAllOrganizationIdsCreatedBetween(startDate, endDate);
+    }
+
+
+    @Profile(name = "findAllOrganizationIdsModifiedSince", parameters = { })
+    @ScopeAuthenticated
+    public Set<String> findAllOrganizationIdsModifiedSince(Date lastModifiedDate)
+            throws GeneralSecurityException {
+        return internalAccountManagementService.findAllOrganizationIdsModifiedSince(lastModifiedDate);
+    }
+
+
+    @Profile(name = "findEmailsLike", parameters = { })
+    @ScopeAuthenticated
+    public List<String> findEmailsLike(String emailSubstring)
+            throws GeneralSecurityException {
+        return internalAccountManagementService.findEmailsLike(emailSubstring);
+    }
+
+
+    @Profile(name = "findOrganizationsWithNameLike", parameters = { })
+    @ScopeAuthenticated
+    public List<OrganizationDetails> findOrganizationsWithNameLike(String nameSubstring)
+            throws GeneralSecurityException {
+        return internalAccountManagementService.findOrganizationsWithNameLike(nameSubstring);
+    }
+
+
+    @Profile(name = "findUserByEmailInAllowedOrgs", parameters = { })
+    @Override
+    public AdministratableUserDetails findUserByEmailInAllowedOrgs(String email)
+            throws GeneralSecurityException, NoSuchItemException {
+        return internalAccountManagementService.findUserByEmailInAllowedOrgs(email);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getAccountAndOrganizationDetailsByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public AccountAndOrganizationDetails getAccountAndOrganizationDetailsByOrgId(String orgId)
+            throws GeneralSecurityException, NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+            return internalAccountManagementService.getAccountAndOrganizationDetails();
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "mmdLiveShortname", constraints = { @Constraint(type = "NotNull"),
+                    @Constraint(type = "MinimumLength", value = "1") } )
+    } )
+    @Profile(name = "getAccountAndOrganizationDetailsByMmdLiveShortname", parameters = { })
+    @ScopeAuthenticated
+    public AccountAndOrganizationDetails getAccountAndOrganizationByMmdLiveShortname(String mmdLiveShortname)
+            throws GeneralSecurityException, NoSuchItemException {
+        return internalAccountManagementService.getAccountAndOrganizationByMmdLiveShortname(mmdLiveShortname);
+    }
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getBaseProductsByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public BaseProductDetails getBaseProductsByOrgId(String orgId)
+        throws NoSuchItemException {
+        return internalAccountManagementService.getBaseProductsByOrgId(orgId);
+    }
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "orgId", constraints = { @Constraint(type = "NotNull"),
+                                                       @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getMmdLiveSettingsByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public MmdLiveSettingDetails getMmdLiveSettingsByOrgId(String orgId)
+            throws NoSuchItemException {
+        return internalAccountManagementService.getMmdLiveSettingsByOrgId(orgId);
+    }
+
+
+    @Profile(name = "getAccountAndOrganizationByUserEmail", parameters = { })
+    @ScopeAuthenticated
+    public AccountAndOrganizationDetails getAccountAndOrganizationByUserEmail(String email)
+            throws GeneralSecurityException, NoSuchItemException {
+        return internalAccountManagementService.getAccountAndOrganizationByUserEmail(email);
+    }
+
+    @Profile(name = "getOrgIdByEmail", parameters = { })
+    @ScopeAuthenticated
+    public HashMap<String, String> getOrgIdByEmail(String email) throws GeneralSecurityException, NoSuchItemException {
+        AccountAndOrganizationDetails accountAndOrgDetails = internalAccountManagementService.getAccountAndOrganizationByUserEmail(email);
+        HashMap<String, String> toReturn = new HashMap<String, String>();
+        toReturn.put("orgId", accountAndOrgDetails.getOrganizationDetails().getId());
+        return toReturn;
+    }
+
+    @Profile(name = "getAllBaseProductTemplates", parameters = { })
+    @ScopeAuthenticated
+    public List<BaseProductTemplateDetails> getAllBaseProductTemplates()
+            throws GeneralSecurityException {
+        return internalAccountManagementService.getAllBaseProductTemplates();
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "baseProductTypeList", constraints = { @Constraint(type = "NotNull"),
+                                                                 @Constraint(type = "MinimumLength", value = "1") } )
+    } )
+    @Profile(name = "getAllActiveOrganizationIdsByBaseProductTypes", parameters = { })
+    @ScopeAuthenticated
+    public List<String> getAllActiveOrganizationIdsByBaseProductTypes(List<BaseProductType> baseProductTypeList)
+    		throws GeneralSecurityException {
+    	return internalAccountManagementService.getAllActiveOrganizationIdsByBaseProductTypes(baseProductTypeList);
+    }
+
+    @Profile(name = "getAllActiveOrganizationDetails", parameters = { })
+    @ScopeAuthenticated
+    public List<OrganizationDetails> getAllActiveOrganizationDetails(Boolean isMmdLiveEnabledRequired)
+    		throws GeneralSecurityException {
+    	return internalAccountManagementService.getAllActiveOrganizationDetails(isMmdLiveEnabledRequired);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "sku", constraints = { @Constraint(type = "NotNull"),
+                                                 @Constraint(type = "MinimumLength", value = "1"),
+                                                 @Constraint(type = "MaximumLength", value = "50") } ),
+       @Parameter(name = "productRatePlanName", constraints = { @Constraint(type = "NotNull"),
+                                                                @Constraint(type = "MinimumLength", value = "1"),
+                                                                @Constraint(type = "MaximumLength", value = "50") } )
+    } )
+    @Profile(name = "getZuoraProductRatePlanId", parameters = { })
+    @ScopeAuthenticated
+    public String getZuoraProductRatePlanId(String sku, String productRatePlanName)
+            throws GeneralSecurityException, InvalidArgumentsException {
+        throw new UnsupportedOperationException("Unsupported Method");
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "getUsersByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public List<AdministratableUserDetails> getUsersByOrgId(String orgId)
+            throws GeneralSecurityException {
+        List<AdministratableUserDetails> administratableUserDetailsList = null;
+
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            administratableUserDetailsList = internalAccountManagementService.getUsers();
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+
+        return administratableUserDetailsList;
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "disabled", constraints = { } )
+    } )
+    @Profile(name = "setOrganizationDisabledByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public void setOrganizationDisabledByOrgId(String orgId, boolean disabled)
+            throws GeneralSecurityException, NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            internalAccountManagementService.setOrganizationDisabled(disabled);
+
+            clearFSASCache(orgId);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "baseProductDetails", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "baseProductDetails.baseProductType", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "updateBaseProductByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public void updateBaseProductByOrgId(String orgId, BaseProductDetails baseProductDetails)
+            throws GeneralSecurityException, NoSuchItemException {
+        if (baseProductDetails.isSelfServiced()) {
+            throw new InvalidArgumentsException("BaseProductDetails cannot be self-serviced.");
+        }
+
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            baseProductDetails.setSelfServiced(false);
+
+            internalAccountManagementService.updateBaseProductFromBaseProductDetails(baseProductDetails);
+
+            runOSTA();
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+
+        // Clear FSAS
+        clearFSASCache(orgId);
+    }
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "baseProductTemplateDetails", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "baseProductTemplateDetails.baseProductType", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "updateBaseProductTemplate", parameters = { })
+    @ScopeAuthenticated
+    public void updateBaseProductTemplate(BaseProductTemplateDetails baseProductTemplateDetails)
+            throws GeneralSecurityException {
+        internalAccountManagementService.updateBaseProductTemplate(baseProductTemplateDetails);
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "billingContactDetails", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "updateBillingContactByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public void updateBillingContactByOrgId(String orgId, ContactDetails billingContactDetails)
+            throws GeneralSecurityException, NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            updateBillingContact(billingContactDetails);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "orgId", constraints = { @Constraint(type = "NotNull"),
+                                                       @Constraint(type = "UUID") } ),
+            @Parameter(name = "mmdLiveSettingDetails", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "updateMmdLiveSettingByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public void updateMmdLiveSettingByOrgId(String orgId, MmdLiveSettingDetails mmdLiveSettingDetails)
+            throws GeneralSecurityException, NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            updateMmdLiveSetting(mmdLiveSettingDetails);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+
+    @Profile(name = "updateCreditCardByOrgId", parameters = { })
+    @ScopeAuthenticated
+    @Deprecated
+    public void updateCreditCardByOrgId(String orgId, CreditCardDetails creditCardDetails)
+            throws GeneralSecurityException, NoSuchItemException {
+        throw new UnsupportedOperationException("Unsupported Operation");
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "organizationDetails", constraints = { @Constraint(type = "NotNull") } ),
+        @Parameter(name = "organizationDetails.id", constraints = { @Constraint(type = "UUID") } )
+    } )
+    @Profile(name = "updateOrganizationWithRoot", parameters = { })
+    @ScopeAuthenticated
+    public void updateOrganizationWithRoot(OrganizationDetails organizationDetails)
+            throws GeneralSecurityException, NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(organizationDetails.getId()));
+
+            hackSanitizeOrganizationDetails(organizationDetails);
+            internalAccountManagementService.updateOrganization(organizationDetails, true);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "administratableUserDetails", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "updateUserByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public void updateUserByOrgId(String orgId, AdministratableUserDetails administratableUserDetails)
+            throws GeneralSecurityException, InvalidArgumentsException, NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            updateUser(administratableUserDetails);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "contentDeliveryNetworkTypes", constraints = { @Constraint(type = "NotNull"),
+                                                                         @Constraint(type = "MinimumLength", value = "1") } ),
+        @Parameter(name = "contentDeliveryNetworkConfigurationDetailsSet", constraints = { } )
+    } )
+    @Profile(name = "updateContentDeliveryNetworkConfigurationsByOrgId", parameters = { })
+    public void updateContentDeliveryNetworkConfigurationsByOrgId(String orgId, Set<ContentDeliveryNetworkType> contentDeliveryNetworkTypes, Set<ContentDeliveryNetworkConfigurationDetails> contentDeliveryNetworkConfigurationDetailsSet)
+            throws NoSuchItemException, GeneralSecurityException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+
+        try {
+            SecurityContext.setAuthenticatedUser(AuthenticatedUser.createAdminAuthenticatedUser(orgId));
+
+            internalAccountManagementService.updateContentDeliveryNetworkConfigurations(contentDeliveryNetworkTypes, contentDeliveryNetworkConfigurationDetailsSet);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+        @Parameter(name = "contentDeliveryNetworkPublisherType", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "getContentDeliveryNetworkPublisherDetailsListByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public List<ContentDeliveryNetworkPublisherDetails> getContentDeliveryNetworkPublisherDetailsListByOrgId(String orgId, ContentDeliveryNetworkPublisherType contentDeliveryNetworkPublisherType)
+            throws NoSuchItemException, InvalidArgumentsException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+
+        try {
+            SecurityContext.setAuthenticatedUser(AuthenticatedUser.createAdminAuthenticatedUser(orgId));
+
+            return internalAccountManagementService.getContentDeliveryNetworkPublisherDetailsList(contentDeliveryNetworkPublisherType);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+
+    @ArgumentValidation(parameters = {
+        @Parameter(name = "contentDeliveryNetworkType", constraints = { @Constraint(type = "NotNull") } )
+    } )
+    @Profile(name = "getAllContentDeliveryNetworkApiDetails", parameters = { })
+    @ScopeAuthenticated
+    public List<ContentDeliveryNetworkApiDetails> getAllContentDeliveryNetworkApiDetails(ContentDeliveryNetworkType contentDeliveryNetworkType) {
+        return internalAccountManagementService.getAllContentDeliveryNetworkApiDetails(contentDeliveryNetworkType);
+    }
+
+
+    @Profile(name = "getSkuReport", parameters = { })
+    @ScopeAuthenticated
+    public List<OrganizationReportEntryDetails> getSkuReport() {
+        return internalAccountManagementService.getSkuReport();
+    }
+
+
+    @Profile(name = "getOrganizationApiKeySecretPairChangeSet", parameters = {
+        @ProfileParameter(name = "modifiedSince", log = true)
+    })
+    @ScopeAuthenticated
+    @Override
+    public OrganizationApiKeySecretPairChangeSet getOrganizationApiKeySecretPairChangeSet(Date modifiedSince) {
+        return internalAccountManagementService.getOrganizationApiKeySecretPairChangeSet(modifiedSince);
+    }
+
+    @Profile(name = "getUnclearedExpiredDisabledAccounts", parameters = { })
+    @ScopeAuthenticated
+    public Set<String> getUnclearedExpiredDisabledAccounts()
+        throws GeneralSecurityException {
+        return internalAccountManagementService.getUnclearedExpiredDisabledAccounts();
+    }
+
+    @ArgumentValidation(parameters = {
+            @Parameter(name = "orgId", constraints = { @Constraint(type = "UUID") } ),
+    } )
+    @Profile(name = "setOrganizationClearedByOrgId", parameters = { })
+    @ScopeAuthenticated
+    public void setOrganizationClearedByOrgId(String orgId)
+            throws GeneralSecurityException, NoSuchItemException {
+        AuthenticatedUser origUser = SecurityContext.getAuthenticatedUser();
+
+        try {
+            SecurityContext.setAuthenticatedUser(SharedUtilities.createAdministratorAuthenticatedUser(orgId));
+
+            internalAccountManagementService.setOrganizationClearedDate();
+
+            clearFSASCache(orgId);
+        } finally {
+            SecurityContext.setAuthenticatedUser(origUser);
+        }
+    }
+
+
+    //-------------------------------------------------------------
+    // Methods - IoC
+    //-------------------------------------------------------------
+
+    public void setInternalAccountManagementService(InternalAccountManagementService internalAccountManagementService) {
+        this.internalAccountManagementService = internalAccountManagementService;
+    }
+
+
+    public void setOrganizationStateTransitionAgent(OrganizationStateTransitionAgent organizationStateTransitionAgent) {
+        this.organizationStateTransitionAgent = organizationStateTransitionAgent;
+    }
+
+
+    public void setFeatureSetAuthorizationServiceFactory(ServiceFactory<FeatureSetAuthorizationService> featureSetAuthorizationServiceFactory) {
+        this.featureSetAuthorizationServiceFactory = featureSetAuthorizationServiceFactory;
+    }
+
+
+    public void setInternalEmailService(InternalEmailService internalEmailService) {
+        this.internalEmailService = internalEmailService;
+    }
+
+
+    public void setSharedUtilities(SharedUtilities sharedUtilities) {
+        this.sharedUtilities = sharedUtilities;
+    }
+
+
+    public void setAccountManagementServiceAuthenticationUsername(String accountManagementServiceAuthenticationUsername) {
+        this.accountManagementServiceAuthenticationUsername = accountManagementServiceAuthenticationUsername;
+    }
+
+
+    public void setAccountManagementServiceAuthenticationPassword(String accountManagementServiceAuthenticationPassword) {
+        this.accountManagementServiceAuthenticationPassword = accountManagementServiceAuthenticationPassword;
+    }
+
+
+    //-------------------------------------------------------------
+    // Methods - Private
+    //-------------------------------------------------------------
+
+    private BaseProductDetails createBaseProductDetailsFromBaseProductTemplateDetails(BaseProductTemplateDetails baseProductTemplateDetails, boolean isSelfServiced) {
+        BaseProductDetails baseProductDetails = new BaseProductDetails();
+
+        baseProductDetails.setBaseProductType(baseProductTemplateDetails.getBaseProductType());
+        baseProductDetails.setSelfServiced(isSelfServiced);
+        baseProductDetails.setPaymentRequired(baseProductTemplateDetails.isPaymentRequired());
+
+        if (baseProductTemplateDetails.getExpirationDays() > 0) {
+            Calendar calendar = Calendar.getInstance();
+
+            // TODO: Should I round up to the end of the day?
+            calendar.add(Calendar.DATE, baseProductTemplateDetails.getExpirationDays());
+
+            baseProductDetails.setExpirationDate(calendar.getTime());
+        }
+
+        baseProductDetails.setAdNetworkAdaptvEnabled(baseProductTemplateDetails.isAdNetworkAdaptvEnabled());
+        baseProductDetails.setAdNetworkAdTechEnabled(baseProductTemplateDetails.isAdNetworkAdTechEnabled());
+        baseProductDetails.setAdNetworkDelveEnabled(baseProductTemplateDetails.isAdNetworkDelveEnabled());
+        baseProductDetails.setAdNetworkLiveRailEnabled(baseProductTemplateDetails.isAdNetworkLiveRailEnabled());
+        baseProductDetails.setAdNetworkOasEnabled(baseProductTemplateDetails.isAdNetworkOasEnabled());
+        baseProductDetails.setAdNetworkTremorMediaEnabled(baseProductTemplateDetails.isAdNetworkTremorMediaEnabled());
+        baseProductDetails.setAdvancedPerformanceMetricsEnabled(baseProductTemplateDetails.isAdvancedPerformanceMetricsEnabled());
+        baseProductDetails.setAdvancedPlayerTemplatesEnabled(baseProductTemplateDetails.isAdvancedPlayerTemplatesEnabled());
+        baseProductDetails.setAnalyticsAPIEnabled(baseProductTemplateDetails.isAnalyticsAPIEnabled());
+        baseProductDetails.setAsperaEnabled(baseProductTemplateDetails.isAsperaEnabled());
+        baseProductDetails.setClosedCaptioningEnabled(baseProductTemplateDetails.isClosedCaptioningEnabled());
+        baseProductDetails.setCuePointsEnabled(baseProductTemplateDetails.isCuePointsEnabled());
+        baseProductDetails.setCustomEncodingProfilesEnabled(baseProductTemplateDetails.isCustomEncodingProfilesEnabled());
+        baseProductDetails.setCustomPlayerLogoEnabled(baseProductTemplateDetails.isCustomPlayerLogoEnabled());
+        baseProductDetails.setCustomPropertyEnabled(baseProductTemplateDetails.isCustomPropertyEnabled());
+        baseProductDetails.setDrmEnabled(baseProductTemplateDetails.isDrmEnabled());
+        baseProductDetails.setEmailToAFriendEnabled(baseProductTemplateDetails.isEmailToAFriendEnabled());
+        baseProductDetails.setFtpEnabled(baseProductTemplateDetails.isFtpEnabled());
+        baseProductDetails.setHttpDynamicStreamingEnabled(baseProductTemplateDetails.isHttpDynamicStreamingEnabled());
+        baseProductDetails.setDashStreamingEnabled(baseProductTemplateDetails.isDashStreamingEnabled());
+        baseProductDetails.setHttpLiveStreamEncryptionEnabled(baseProductTemplateDetails.isHttpLiveStreamEncryptionEnabled());
+        baseProductDetails.setHttpLiveStreamingEnabled(baseProductTemplateDetails.isHttpLiveStreamingEnabled());
+        baseProductDetails.setLiveStreamingEnabled(baseProductTemplateDetails.isLiveStreamingEnabled());
+        baseProductDetails.setMmdLiveStreamingEnabled(baseProductTemplateDetails.isMmdLiveStreamingEnabled());
+
+        // TODO: Remove this feature flag once no more AMS clients depend on it. -jpacker.2014.07.23
+        baseProductDetails.setMobileLiveStreamingEnabled(false);
+
+        baseProductDetails.setMobileH264Enabled(baseProductTemplateDetails.isMobileH264Enabled());
+        baseProductDetails.setMediaSchedulingEnabled(baseProductTemplateDetails.isMediaSchedulingEnabled());
+        baseProductDetails.setMobile3gpEnabled(baseProductTemplateDetails.isMobile3gpEnabled());
+        baseProductDetails.setMobileEmbedCodeEnabled(baseProductTemplateDetails.isMobileEmbedCodeEnabled());
+        baseProductDetails.setPerformanceMetricsOverviewEnabled(baseProductTemplateDetails.isPerformanceMetricsOverviewEnabled());
+        baseProductDetails.setPlayerEmbedEnabled(baseProductTemplateDetails.isPlayerEmbedEnabled());
+        baseProductDetails.setPlayerPluginsEnabled(baseProductTemplateDetails.isPlayerPluginsEnabled());
+        baseProductDetails.setReadExternalAPIEnabled(baseProductTemplateDetails.isReadExternalAPIEnabled());
+        baseProductDetails.setRssEnabled(baseProductTemplateDetails.isRssEnabled());
+        baseProductDetails.setSearchInsideEnabled(baseProductTemplateDetails.isSearchInsideEnabled());
+        baseProductDetails.setSmoothStreamingEnabled(baseProductTemplateDetails.isSmoothStreamingEnabled());
+        baseProductDetails.setSocialSitesEnabled(baseProductTemplateDetails.isSocialSitesEnabled());
+        baseProductDetails.setSyndicationEnabled(baseProductTemplateDetails.isSyndicationEnabled());
+        baseProductDetails.setTopConceptsEnabled(baseProductTemplateDetails.isTopConceptsEnabled());
+        baseProductDetails.setTvEverywhereEnabled(baseProductTemplateDetails.isTvEverywhereEnabled());
+        baseProductDetails.setVideoQualityLowestEnabled(baseProductTemplateDetails.isVideoQualityLowestEnabled());
+        baseProductDetails.setVideoQualityLowEnabled(baseProductTemplateDetails.isVideoQualityLowEnabled());
+        baseProductDetails.setVideoQualityMediumEnabled(baseProductTemplateDetails.isVideoQualityMediumEnabled());
+        baseProductDetails.setVideoQualityHighEnabled(baseProductTemplateDetails.isVideoQualityHighEnabled());
+        baseProductDetails.setVideoQualityHighDefinitionEnabled(baseProductTemplateDetails.isVideoQualityHighDefinitionEnabled());
+        baseProductDetails.setVisualPlayerDesignerEnabled(baseProductTemplateDetails.isVisualPlayerDesignerEnabled());
+        baseProductDetails.setWidevineEnabled(baseProductTemplateDetails.isWidevineEnabled());
+        baseProductDetails.setWriteExternalAPIEnabled(baseProductTemplateDetails.isWriteExternalAPIEnabled());
+
+        baseProductDetails.setBandwidthUsageLimitInMegabytes(baseProductTemplateDetails.getBandwidthUsageLimitInMegabytes());
+        baseProductDetails.setStorageLimitInMegabytes(baseProductTemplateDetails.getStorageLimitInMegabytes());
+        baseProductDetails.setUserLimit(baseProductTemplateDetails.getUserLimit());
+
+        baseProductDetails.setLifetimeBandwidthUsageCreditInMegabytes(baseProductTemplateDetails.getLifetimeBandwidthUsageCreditInMegabytes());
+
+        baseProductDetails.setMaxMobileResultSetSize(baseProductTemplateDetails.getMaxMobileResultSetSize());
+        baseProductDetails.setMaxNumLiveStreams(baseProductTemplateDetails.getMaxNumLiveStreams());
+        baseProductDetails.setNumUndeleteHours(baseProductTemplateDetails.getNumUndeleteHours());
+
+        baseProductDetails.setPlayReadyEnabled(baseProductTemplateDetails.isPlayReadyEnabled());
+
+        return baseProductDetails;
+    }
+
+
+    private ContactDetails createContactDetailsFromOrganizationDetailsAndConfidentialUserDetails(OrganizationDetails organizationDetails, ConfidentialUserDetails confidentialUserDetails) {
+        ContactDetails contactDetails = new ContactDetails();
+
+        contactDetails.setEmail(confidentialUserDetails.getEmail());
+        contactDetails.setFirstName(confidentialUserDetails.getFirstName());
+        contactDetails.setLastName(confidentialUserDetails.getLastName());
+
+        if (organizationDetails != null) {
+            contactDetails.setWorkPhone(organizationDetails.getPhoneNumber());
+            contactDetails.setStreetAddress(SharedUtilities.cloneStreetAddress(organizationDetails.getStreetAddress()));
+        }
+
+        return contactDetails;
+    }
+
+
+    private void runOSTA() {
+        try {
+            String orgId = SecurityContext.getAuthenticatedUser().organizationId();
+
+            AccountDetails accountDetails = internalAccountManagementService.getAccountAndOrganizationDetails().getAccountDetails();
+
+            if (accountDetails != null && !accountDetails.isDisabled()) {
+                organizationStateTransitionAgent.updateOrganization(orgId);
+            }
+        } catch (Throwable t) {
+            logger.error("Error running OSTA", t);
+        }
+    }
+
+
+    private void clearFSASCache(String orgId) {
+        FeatureSetAuthorizationService featureSetAuthorizationService = featureSetAuthorizationServiceFactory.getService(accountManagementServiceAuthenticationUsername, orgId, accountManagementServiceAuthenticationPassword);
+        try {
+            featureSetAuthorizationService.clearCache();
+        } catch (Throwable t) {
+            logger.error("Error clearing FSAS", t);
+        } finally {
+            featureSetAuthorizationServiceFactory.returnService(featureSetAuthorizationService);
+        }
+    }
+
+
+    //-------------------------------------------------------------
+    // Methods - Private - Static
+    //-------------------------------------------------------------
+
+    private static void hackSanitizeOrganizationDetails(OrganizationDetails organizationDetails) {
+        // HACK: PCho: Need to sanitize OrganizationDetails because the EmailValidator considers the empty string as
+        // an invalid email. This normally doesn't matter, but the free-trial sign up page that uses nusoap sets
+        // forwardingEmail to an empty string, but should be set to null. Due to that, I'm doing a hack to sanitize
+        // the forwardingEmail to be an email or null.
+        if (organizationDetails != null) {
+            if (StringUtils.isEmpty(organizationDetails.getForwardingEmail())) {
+                organizationDetails.setForwardingEmail(null);
+            }
+            if (StringUtils.isEmpty(organizationDetails.getOracleId())) {
+                organizationDetails.setOracleId(null);
+            }
+            if (StringUtils.isEmpty(organizationDetails.getBandwidthCounterName())) {
+                organizationDetails.setBandwidthCounterName(null);
+            }
+            if (StringUtils.isEmpty(organizationDetails.getStorageCounterName())) {
+                organizationDetails.setStorageCounterName(null);
+            }
+        }
+    }
+}
